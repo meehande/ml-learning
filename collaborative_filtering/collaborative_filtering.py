@@ -1,9 +1,10 @@
 import numpy as np
+import pandas as pd
 import tensorflow as tf
-from tensorflow import keras
+from typing import Tuple
 
 
-def read_datasets():
+def read_wxb():
     # assumes cli has been run to download data
     with open('./data/coursera-data/small_movies_X.csv', 'rb') as f:
         X = np.loadtxt(f, delimiter=',')
@@ -14,13 +15,22 @@ def read_datasets():
     with open('./data/coursera-data/small_movies_b.csv', 'rb') as f:
         b = np.loadtxt(f, delimiter=',')
 
+    return X, W, b, 
+
+
+def read_ratings():
     with open('./data/coursera-data/small_movies_Y.csv', 'rb') as f:
         Y = np.loadtxt(f, delimiter=',')
 
     with open('./data/coursera-data/small_movies_R.csv', 'rb') as f:
         R = np.loadtxt(f, delimiter=',')
+    return Y, R
 
-    return X, W, b, Y, R
+
+def read_movie_list() -> pd.DataFrame:
+    df = pd.read_csv('./data/coursera-data/small_movie_list.csv', header=0, index_col=0,  delimiter=',', quotechar='"')
+    mlist = df["title"].to_list()
+    return (mlist, df)
 
 
 def manually_compute_cost(X, W, b, Y, R, lambda_) -> float:
@@ -76,11 +86,36 @@ def compute_cost(X, W, b, Y, R, lambda_) -> tf.Tensor:
     return J
 
 
-if __name__ == "__main__":
-    X, W, b, Y, R = read_datasets()
+def train_model(X, W, b, Y_norm, R, lambda_, alpha,) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
+    """
+    
+    """
+    optimized = tf.keras.optimizers.Adam(learning_rate=alpha)
+    iterations = 200
+    for i in range(iterations):
+        with tf.GradientTape() as tape:
+            J = compute_cost(X, W, b, Y_norm, R, lambda_)
+        grads = tape.gradient(J, [X, W, b])
+        optimized.apply_gradients(zip(grads, [X, W, b]))
+        if i % 10 == 0:
+            print(f'iteration {i}, cost: {J}')    
+    return X, W, b
+
+
+def predict(X: tf.Tensor, W: tf.Tensor, b: tf.Tensor, Y_mean: np.array):
+    p = np.matmul(X.numpy(), W.numpy().T) + b.numpy().T
+
+    p = p + Y_mean
+    return p
+
+
+def _validate_cost_fn():
+    X, W, b = read_wxb()
+    Y, R = read_ratings()
     num_movies, num_features = X.shape
     num_users, _ = W.shape
 
+    # take sample 
     num_users_r = 4
     num_movies_r = 5 
     num_features_r = 3
@@ -94,9 +129,65 @@ if __name__ == "__main__":
 
     assert np.isclose(J, 13.67, atol=0.01)
 
-    # with regularization
     J = compute_cost(X_r, W_r, b_r, Y_r, R_r, 1.5)
-    import pdb; pdb.set_trace()
     assert np.isclose(J, 28.09, atol=0.01)
 
+
+def mean_normalize_ratings(Y, R):
+    # mean normalization for collaboartive filtering just subtracts mean 
+    # to each rating
+    # Predict then needs to reverse this -> thus returning the mean
+    # for each item for users who have not rated anything 
+    # (helps with cold start problem, on top of increasing efficiency of gradient descent)  
+    # NB: use R to ensure correct divisor -> only include items a user has rated in computing mean
+    Ymean = (np.sum(Y*R,axis=1)/(np.sum(R, axis=1)+1e-12)).reshape(-1,1)
+    Ynorm = Y - np.multiply(Ymean, R)
+    return Ynorm, Ymean
+
+
+
+if __name__ == "__main__":
+    Y, R = read_ratings()    
+    num_movies = Y.shape[0]
+
+    my_y = np.zeros(num_movies)
+    # let copilot rate movies..!
+    my_y[0] = 4
+    my_y[97] = 2
+    my_y[6] = 3
+    my_y[11]= 5
+    my_y[53] = 4
+    my_y[63]= 5
+    my_y[794]= 3
+    my_y[183]= 4
+    my_y[226] = 5
+
+    my_r = (my_y > 0).astype(int)
+
+    Y = np.c_[Y, my_y]
+    R = np.c_[R, my_r]
+
+    Ymean, Ynorm = mean_normalize_ratings(Y, R)
+
+    num_items, num_users = Y.shape
+    num_features = 100
+
+    tf.random.set_seed(1234) # for consistent results
+    W = tf.Variable(tf.random.normal((num_users, num_features),dtype=tf.float64),  name='W')
+    X = tf.Variable(tf.random.normal((num_movies, num_features),dtype=tf.float64),  name='X')
+    b = tf.Variable(tf.random.normal((1, num_users),   dtype=tf.float64),  name='b')
+
+    train_model(X, W, b, Ynorm, R, 1, 1e-1)
+
+    predictions = predict(X, W, b, Ymean)
+
     
+        
+
+
+
+
+
+    
+
+
